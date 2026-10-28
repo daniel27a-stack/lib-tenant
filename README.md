@@ -3,16 +3,69 @@
 Spring Boot auto-configuration library generated with `java-skeleton` (Gradle + `java-library`
 plugin, Spring Boot BOM imported as a `platform()`; it is a plain jar, not an executable one).
 
-## Spring Boot auto-configuration
+## What it is
 
-Adding this library as a dependency of a Spring Boot application is enough to activate it: no
-`@Import` or `@ComponentScan` is needed. The auto-configuration classes are listed in
-`src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`.
+`lib-tenant` is a library for servlet-based Spring Boot applications. A **tenant** is the customer
+(organization) that owns the data of a request; it is not the user or the session. The library always
+knows which tenant the current request belongs to and carries it between services, so services never
+handle it by hand.
 
-The placeholder `LibraryAutoConfiguration` registers a `LibraryInfo` bean with
-`@ConditionalOnMissingBean`, so a consumer can override it by defining its own bean. Replace it
-with the real technical content of the library and keep new auto-configuration classes listed in
-the `.imports` file. `LibraryAutoConfigurationIntTest` proves the activation.
+It does not write logs or touch the MDC (that belongs to `lib-logging`, which reads `TenantContext`),
+it does not validate JWT or API keys (the `edge` does) and it does no roles or authorization. Its only
+pirca dependency is `lib-errors`.
+
+Adding the dependency to a servlet web application is enough to activate it: no `@Import` or
+`@ComponentScan` is needed. `TenantAutoConfiguration` is listed in
+`src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`
+and is active only in servlet web applications. Every piece backs off when the application defines its
+own bean of the same type.
+
+## The tenant header
+
+The tenant travels in the `X-Tenant-Id` header. A blank header counts as no tenant; a value is trimmed.
+
+The header is **trusted, not validated** here. It is protected by the closed network: only the `edge`
+is reachable from outside, and the `edge` is the one that authenticates and sets the header. Never expose
+a service that uses this library directly.
+
+## Reading the tenant
+
+```java
+Optional<String> tenant = TenantContext.current();   // empty when no tenant is set
+
+TenantContext.runAs("acme", () -> {                  // outside a request: a plain thread, a scheduled task
+    // TenantContext.current() returns "acme" here
+});                                                  // and is no longer set after the block
+```
+
+`runAs` rejects a null or blank tenant with `IllegalArgumentException`.
+
+## Inbound requests
+
+- `TenantFilter` sets the tenant from `X-Tenant-Id` for the whole request. It never rejects: a request
+  without the header proceeds with no tenant.
+- Its order is `TenantFilter.ORDER`, which is `Ordered.HIGHEST_PRECEDENCE + 10`. A filter that needs the
+  tenant, such as the one of `lib-logging`, must have a later (higher) order.
+- `TenantRequiredInterceptor` is registered on `/api/**` only. A request to an `/api/**` route without a
+  tenant fails with lib-errors' `BadRequestException` and code `TENANT_REQUIRED`, answered with a 400
+  `application/problem+json` by `ErrorsControllerAdvice`; this library builds no response itself. Routes
+  outside `/api/**` (health, Actuator) are answered without a tenant.
+- The tenant does not follow a Spring MVC asynchronous dispatch (`DeferredResult`, `Callable`) after the
+  filter has returned.
+
+## Outbound calls
+
+Every `RestClient.Builder` injected from Spring gets an interceptor that adds `X-Tenant-Id` with the current
+tenant to each call, when one is set; with no tenant no header is added. This covers a `RestClient` and an
+HTTP interface (`@HttpExchange`) built on it. It does **not** cover `RestTemplate`, Feign or reactive
+(WebFlux) applications. Build the `RestClient` from the injected builder, not with `RestClient.create()`.
+
+## Asynchronous work
+
+`TenantTaskDecorator` copies the tenant to the thread that runs `@Async` methods and tasks of Spring Boot's
+default executor (`applicationTaskExecutor`). Spring Boot applies a `TaskDecorator` only when exactly one
+exists: an application that defines its own `TaskDecorator` replaces this one and must propagate the tenant
+itself, and so must an executor you create by hand.
 
 ## Build and test
 
