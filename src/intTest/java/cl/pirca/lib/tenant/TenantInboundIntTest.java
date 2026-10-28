@@ -3,6 +3,9 @@ package cl.pirca.lib.tenant;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpStatusCode;
@@ -56,5 +59,23 @@ class TenantInboundIntTest {
         ResponseEntity<String> response = get("/health", null);
         assertThat(response.getStatusCode().value()).isEqualTo(200);
         assertThat(response.getBody()).isEqualTo("none");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/async-callable", "/api/async-future", "/api/async-deferred"})
+    void anAsyncRouteSeesTheTenantAfterTheAsyncDispatch(String path) {
+        ResponseEntity<String> response = get(path, "acme");
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+        assertThat(response.getBody()).isEqualTo("ok");
+        assertThat(response.getHeaders().getFirst("X-Seen-Tenant")).isEqualTo("acme");
+    }
+
+    @ParameterizedTest
+    @CsvSource({"/api/async-callable,", "/api/async-future,", "/api/async-callable,' '", "/api/async-future,' '"})
+    void anAsyncRouteWithoutTenantAnswers400WithTenantRequired(String path, String tenant) {
+        ResponseEntity<String> response = get(path, tenant);
+        assertThat(response.getStatusCode().value()).isEqualTo(400);
+        assertThat(response.getHeaders().getContentType().toString()).startsWith("application/problem+json");
+        assertThat(response.getBody()).contains("\"code\":\"TENANT_REQUIRED\"");
     }
 }

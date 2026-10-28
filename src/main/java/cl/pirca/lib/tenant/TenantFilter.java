@@ -22,6 +22,15 @@ public class TenantFilter extends OncePerRequestFilter implements Ordered {
         return ORDER;
     }
 
+    /**
+     * Runs the filter also on the dispatch that Spring MVC makes when asynchronous work (Callable,
+     * CompletableFuture, DeferredResult) finishes, so the tenant is bound while the result is handled.
+     */
+    @Override
+    protected boolean shouldNotFilterAsyncDispatch() {
+        return false;
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
