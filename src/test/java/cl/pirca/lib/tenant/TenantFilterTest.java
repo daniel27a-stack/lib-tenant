@@ -19,6 +19,11 @@ class TenantFilterTest {
     private final MockHttpServletResponse response = new MockHttpServletResponse();
 
     @Test
+    void filtersAsyncDispatches() {
+        assertThat(filter.shouldNotFilterAsyncDispatch()).isFalse();
+    }
+
+    @Test
     void orderIsTheDocumentedConstant() {
         assertThat(filter.getOrder()).isEqualTo(TenantFilter.ORDER);
     }
