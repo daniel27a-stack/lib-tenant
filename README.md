@@ -50,8 +50,10 @@ TenantContext.runAs("acme", () -> {                  // outside a request: a pla
   tenant fails with lib-errors' `BadRequestException` and code `TENANT_REQUIRED`, answered with a 400
   `application/problem+json` by `ErrorsControllerAdvice`; this library builds no response itself. Routes
   outside `/api/**` (health, Actuator) are answered without a tenant.
-- The tenant does not follow a Spring MVC asynchronous dispatch (`DeferredResult`, `Callable`) after the
-  filter has returned.
+- The tenant follows the Spring MVC asynchronous dispatch of `Callable`, `CompletableFuture` and
+  `DeferredResult` under `/api/**`: a valid request sees the tenant in the code that runs after the
+  async work, as in a synchronous controller. Work that application code starts on its own threads is
+  not covered; see Asynchronous work.
 
 ## Outbound calls
 
