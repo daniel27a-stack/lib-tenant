@@ -126,6 +126,12 @@ for your machine: CI does not use them. Run `make` with no arguments to list the
 
 ## Publish
 
+Merging to `main` publishes the library automatically: the `publish` workflow runs
+`./gradlew build publish tagRelease`, which publishes `cl.pirca.lib.tenant:lib-tenant:<version>` and
+creates tag `v<version>`, using the workflow's own token. To release, change `version` in
+`build.gradle`. If the merge does not change the version, the version is already published, so nothing
+is published and nothing fails (an existing tag is never moved).
+
 Local publishing (to consume it from another project on the same machine):
 
 ```bash

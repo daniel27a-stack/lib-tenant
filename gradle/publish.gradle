@@ -3,6 +3,12 @@
 // Publishing to GitHub Packages needs a token with write:packages, read at build time from the
 // environment (GITHUB_ACTOR / GITHUB_TOKEN) or from Gradle properties (gpr.user / gpr.token, in
 // ~/.gradle/gradle.properties). Never write it in this project.
+//
+// Automatic flow (.github/workflows/publish.yml runs `./gradlew build publish tagRelease` on a push to main):
+//  - the publish task is skipped when the version is already in the registry (a merge that did not
+//    raise the version publishes nothing and does not fail);
+//  - tagRelease creates tag v<version> through the GitHub API if it does not exist. It is not wired
+//    to publish, so local publishing and build never touch it.
 publishing {
     publications {
         maven(MavenPublication) {
@@ -18,5 +24,77 @@ publishing {
                 password = System.getenv('GITHUB_TOKEN') ?: project.findProperty('gpr.token')
             }
         }
+    }
+}
+
+// Plain HTTP helpers shared by the existence check and tagRelease (no extra dependency).
+def httpCall = { String method, String url, String authHeader, String body = null ->
+    HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection()
+    conn.requestMethod = method
+    conn.connectTimeout = 15000
+    conn.readTimeout = 30000
+    if (authHeader) {
+        conn.setRequestProperty('Authorization', authHeader)
+    }
+    if (body != null) {
+        conn.doOutput = true
+        conn.setRequestProperty('Content-Type', 'application/json')
+        conn.outputStream.withCloseable { it.write(body.getBytes('UTF-8')) }
+    }
+    try {
+        return conn.responseCode
+    } finally {
+        conn.disconnect()
+    }
+}
+
+tasks.matching { it.name == 'publishMavenPublicationToGitHubPackagesRepository' }.configureEach { publishTask ->
+    publishTask.onlyIf {
+        String user = System.getenv('GITHUB_ACTOR') ?: project.findProperty('gpr.user')
+        String token = System.getenv('GITHUB_TOKEN') ?: project.findProperty('gpr.token')
+        String auth = (user && token) ?
+                'Basic ' + "${user}:${token}".bytes.encodeBase64().toString() : null
+        String pom = "${project.property('pirca.registryUrl')}/lib-tenant/" +
+                "${project.group.replace('.', '/')}/lib-tenant/${project.version}/lib-tenant-${project.version}.pom"
+        int status = httpCall('GET', pom, auth)
+        if (status == 200) {
+            logger.lifecycle("lib-tenant ${project.version} is already published; skipping publish")
+            return false
+        }
+        if (status == 404) {
+            return true
+        }
+        throw new GradleException("Cannot tell whether lib-tenant ${project.version} is published: GET ${pom} answered ${status}")
+    }
+}
+
+tasks.register('tagRelease') {
+    group = 'publishing'
+    description = 'Creates tag v<version> through the GitHub API if it does not exist (never moves an existing one).'
+    mustRunAfter 'publish'
+    doLast {
+        String repo = System.getenv('GITHUB_REPOSITORY')
+        String sha = System.getenv('GITHUB_SHA')
+        String token = System.getenv('GITHUB_TOKEN')
+        if (!repo || !sha) {
+            throw new GradleException('tagRelease needs GITHUB_REPOSITORY and GITHUB_SHA (set by GitHub Actions)')
+        }
+        String api = System.getenv('GITHUB_API_URL') ?: 'https://api.github.com'
+        String auth = token ? "Bearer ${token}".toString() : null
+        String tag = "v${project.version}"
+        int found = httpCall('GET', "${api}/repos/${repo}/git/ref/tags/${tag}", auth)
+        if (found == 200) {
+            logger.lifecycle("Tag ${tag} already exists; left as is")
+            return
+        }
+        if (found != 404) {
+            throw new GradleException("Cannot check tag ${tag}: GitHub API answered ${found}")
+        }
+        int created = httpCall('POST', "${api}/repos/${repo}/git/refs", auth,
+                "{\"ref\":\"refs/tags/${tag}\",\"sha\":\"${sha}\"}")
+        if (created != 201) {
+            throw new GradleException("Cannot create tag ${tag}: GitHub API answered ${created}")
+        }
+        logger.lifecycle("Created tag ${tag} at ${sha}")
     }
 }
